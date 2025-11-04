@@ -1,0 +1,51 @@
+# Firebase
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+firebaserc-*
+.firebaserc.*
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+package-lock.json
+yarn.lock
+
+# Environment variables (CRITICAL - NEVER COMMIT)
+.env
+.env.local
+.env.*.local
+*.env
+
+# Functions build
+functions/lib/
+functions/.runtimeconfig.json
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Claude Code
+.claude/
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+
+# Firebase cache
+.firebase/
+*.cache
+
+# Sensitive files
+credentials.json
+serviceAccountKey.json
+*.key
+*.pem
