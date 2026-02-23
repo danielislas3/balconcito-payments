@@ -4,183 +4,111 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Firebase Cloud Functions webhook that processes Mercado Pago payment events and sends real-time notifications to a Telegram bot. Used for restaurant payment notifications to a tablet.
+Firebase Cloud Functions que procesa eventos de pago de Mercado Pago y envía notificaciones en tiempo real a un bot de Telegram. Usado para notificaciones de pagos en un restaurante.
 
 ## Architecture
 
 ```
-Mercado Pago (payment event)
-  → Firebase Cloud Function (mpWebhook)
-  → Telegram Bot API
-  → Tablet notification
+Mercado Pago (webhook event)
+  → mpWebhook (Firebase Cloud Function)
+    → SignatureValidator (HMAC SHA-256)
+    → WebhookController
+    → ProcessPaymentWebhookUseCase
+      → MercadoPagoService (fetch payment details)
+      → PaymentMessageFormatter
+      → TelegramService (send notification)
+
+Cloud Scheduler (every 2 min)
+  → checkMovements (Firebase Cloud Function)
+    → CheckRecentMovementsUseCase
+      → MercadoPagoService (fetch recent payments)
+      → Firestore (deduplication via processedPayments collection)
+      → TelegramService (send notification)
 ```
+
+**Two functions:**
+- `mpWebhook` — HTTPS POST, triggered by Mercado Pago webhooks
+- `checkMovements` — Scheduled every 2 minutes, polls MP API to catch direct transfers that don't trigger webhooks
+
+**Payment filtering:** Only notifies `bank_transfer`, `account_money`, and `ticket` types. Credit/debit card payments are intentionally ignored.
 
 ## Project Structure
 
 ```
 functions/
-  ├── index.js          # Main webhook handler (mpWebhook function)
-  ├── package.json      # Node.js dependencies
-  └── .env.local        # Local environment variables (not committed)
-firebase.json           # Firebase configuration
-.firebaserc             # Firebase project aliases
+  ├── index.js                        # DI wiring + Cloud Function exports
+  ├── src/
+  │   ├── controllers/
+  │   │   └── WebhookController.js    # CORS, method validation, routing
+  │   ├── use-cases/
+  │   │   ├── ProcessPaymentWebhookUseCase.js  # Webhook flow
+  │   │   └── CheckRecentMovementsUseCase.js   # Polling flow
+  │   ├── services/
+  │   │   ├── MercadoPagoService.js   # MP API client (getPaymentDetails, getRecentPayments)
+  │   │   └── TelegramService.js      # Telegram Bot API client
+  │   ├── validators/
+  │   │   └── SignatureValidator.js   # HMAC SHA-256 x-signature validation
+  │   └── formatters/
+  │       └── PaymentMessageFormatter.js  # Telegram message formatting
+  └── package.json                    # Node.js 20, firebase-functions v5
+firebase.json                         # Functions + Firestore config (region: nam5)
 ```
 
 ## Key Commands
 
-### Firebase Setup & Deployment
 ```bash
-# Login to Firebase
-firebase login
-
-# Select/create project
-firebase use <project-id>
-
-# Initialize functions (if not done)
-firebase init functions
-# Select: JavaScript, No ESLint, Yes to npm install
-
 # Deploy functions
 firebase deploy --only functions
 
 # View logs
 firebase functions:log
 
-# Get function configuration
+# Run local emulator
+cd functions && npm run serve
+
+# Get/set remote config
 firebase functions:config:get
+firebase functions:config:set telegram.bot_token="<TOKEN>" telegram.chat_id="<CHAT_ID>"
+firebase functions:config:set mercadopago.access_token="<TOKEN>" mercadopago.secret="<SECRET>"
 ```
 
-### Environment Variables
+## Environment Variables
 
-**Production (Firebase):**
-```bash
-firebase functions:config:set \
-  telegram.bot_token="<TOKEN>" \
-  telegram.chat_id="<CHAT_ID>"
+**Production (Firebase config):**
+- `telegram.bot_token` — Bot token from @BotFather
+- `telegram.chat_id` — Target chat ID (negative for groups)
+- `mercadopago.access_token` — MP API access token
+- `mercadopago.secret` — MP webhook secret for signature validation
+
+**Local development** (`functions/.env.local` — not committed):
+```
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
 ```
 
-**Local Development:**
-Create `functions/.env.local`:
-```
-TELEGRAM_BOT_TOKEN=<token>
-TELEGRAM_CHAT_ID=<chat_id>
-```
+## Webhook Flow Details
 
-## Firebase Function Details
+Mercado Pago sends `{ type: "payment", data: { id: "PAYMENT_ID" } }` — the function then fetches full payment details from the MP API. The payload described in previous docs was incorrect; the webhook itself only contains the payment ID.
 
-**Function name:** `mpWebhook`
-**Region:** `us-central1`
-**Trigger:** HTTPS POST request
-**URL format:** `https://us-central1-{PROJECT_ID}.cloudfunctions.net/mpWebhook`
+**Signature validation** (`SignatureValidator.js`): If `mercadopago.secret` is not set, validation is skipped (useful for testing). If `x-signature`/`x-request-id` headers are absent, it also passes (to allow manual testing).
 
-### Webhook Payload (Mercado Pago)
-
-Expected event:
-```json
-{
-  "action": "payment.updated",
-  "data": {
-    "id": 12345678,
-    "status": "approved",
-    "transaction_amount": 150.50,
-    "payer": {
-      "email": "cliente@example.com"
-    }
-  }
-}
-```
-
-Only processes `payment.updated` events with `status: "approved"`.
-
-### Code Architecture
-
-The function in `functions/index.js`:
-1. Sets CORS headers (allows all origins)
-2. Validates HTTP method (POST only)
-3. Parses Mercado Pago webhook payload
-4. Filters for approved payments
-5. Formats Telegram message with payment details
-6. Sends to Telegram Bot API using `fetch()`
-7. Returns success/error response
-
-**Key variables from env:**
-- `process.env.TELEGRAM_BOT_TOKEN` - Bot token from @BotFather
-- `process.env.TELEGRAM_CHAT_ID` - Target chat/group ID
+**Deduplication** (`checkMovements`): Uses Firestore collection `processedPayments` with payment ID as document key to avoid duplicate notifications.
 
 ## Testing
 
-### Importante sobre webhooks de prueba
-Los webhooks de **prueba** de Mercado Pago envían IDs ficticios que NO existen en la API. Por ejemplo:
-- Test webhook: `{ "data": { "id": "123456" } }`
-- Al consultar `/v1/payments/123456` → **404 Not Found**
+**Test webhooks from MP Dashboard** send fake IDs that return 404 from the API — this is expected and normal. For real testing, create an actual test payment via Checkout Pro/API.
 
-Esto es **normal y esperado**. El webhook funciona correctamente, solo necesitas un pago real para probarlo.
-
-### Opción 1: Crear pago de prueba real
-Usa las credenciales de prueba y crea un pago usando:
-- [Checkout Pro](https://www.mercadopago.com.ar/developers/es/docs/checkout-pro/landing)
-- [Checkout API](https://www.mercadopago.com.ar/developers/es/docs/checkout-api/landing)
-
-El pago generará un webhook con un ID real que sí existe en la API.
-
-### Opción 2: Webhook test manual (solo estructura)
 ```bash
+# Manual webhook test (use a real payment ID)
 curl -X POST \
-  https://us-central1-{PROJECT_ID}.cloudfunctions.net/mpWebhook \
+  https://us-central1-balconcito-payments.cloudfunctions.net/mpWebhook \
   -H "Content-Type: application/json" \
-  -d '{
-    "type": "payment",
-    "data": {
-      "id": "PAYMENT_ID_REAL"
-    }
-  }'
+  -d '{"type": "payment", "data": {"id": "REAL_PAYMENT_ID"}}'
 ```
-**Nota**: Reemplaza `PAYMENT_ID_REAL` con un ID de pago existente.
-
-### Desde Mercado Pago Dashboard:
-1. Dashboard → Webhooks → "Enviar evento de prueba"
-2. Esto enviará un ID ficticio → error 404 esperado
-3. Para prueba real: crear pago de prueba primero
-
-## External Setup Requirements
-
-### Telegram Bot Setup
-1. Create bot via @BotFather in Telegram (`/newbot`)
-2. Get `TELEGRAM_BOT_TOKEN` from BotFather
-3. Add bot to target group/chat
-4. Send message, then get `TELEGRAM_CHAT_ID` from:
-   ```
-   https://api.telegram.org/bot{TOKEN}/getUpdates
-   ```
-   Look for `"chat":{"id": NUMBER}`
-
-### Mercado Pago Webhook Configuration
-1. Dashboard → Configuración → Integraciones → Webhooks
-2. Add Firebase function URL
-3. Subscribe to `payment.updated` events
-
-## Security Considerations
-
-- Cloud Functions has HTTP fetch permissions by default (no additional Firebase permissions needed)
-- Consider adding Mercado Pago signature validation (`x-signature` header with HMAC SHA-256)
-- Consider rate limiting to prevent spam
-- Never commit `.env.local` or credentials to git
 
 ## Common Issues
 
-- **404 on function URL**: Wait 1-2 minutes after deploy, verify URL is exact
-- **Telegram "Unauthorized"**: Token invalid/expired, recreate bot
-- **No messages received**: Verify bot is in the chat, check CHAT_ID includes `-` prefix if negative
-- **"firebase-functions not found"**: Run `cd functions && npm install firebase-functions`
-
-## Dependencies
-
-**Runtime:** Node.js 18+
-**Key packages:** `firebase-functions` (included in Firebase Functions environment)
-**External APIs:** Telegram Bot API, Mercado Pago Webhooks
-
-## Cost
-
-- Firebase Cloud Functions: Free tier (2M invocations/month)
-- Telegram Bot API: Free
-- Mercado Pago Webhooks: Included
+- **404 on payment ID**: Expected for MP test webhooks with fake IDs
+- **Telegram "Unauthorized"**: Token invalid/expired, recreate bot via @BotFather
+- **No messages received**: Verify bot is in the chat; `CHAT_ID` requires `-` prefix for groups
+- **Duplicate notifications**: Check Firestore `processedPayments` collection
