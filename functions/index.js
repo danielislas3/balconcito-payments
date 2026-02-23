@@ -85,8 +85,18 @@ exports.mpWebhook = functions
  */
 exports.checkMovements = functions
   .region("us-central1")
-  .pubsub.schedule("every 2 minutes")
+  .pubsub.schedule("every 3 minutes")
+  .timeZone("America/Mexico_City")
   .onRun(async (context) => {
+    // Horario de operación: 4pm a 6am (hora México Central)
+    // Fuera de ese horario el restaurante está cerrado
+    const now = new Date().toLocaleString("en-US", { timeZone: "America/Mexico_City" })
+    const hour = new Date(now).getHours()
+    if (hour >= 6 && hour < 16) {
+      console.log(`Fuera de horario de operación (${hour}h). Saltando.`)
+      return null
+    }
+
     const result = await checkMovementsUseCase.execute()
     console.log("Resultado:", result)
     return null
