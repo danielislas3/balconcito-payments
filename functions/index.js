@@ -5,7 +5,7 @@ const telegram = require("./src/telegram")
 
 admin.initializeApp()
 
-const ALLOWED_PAYMENT_TYPES = ["bank_transfer", "account_money", "ticket"]
+const ALLOWED_PAYMENT_TYPES = ["bank_transfer"]
 
 // ============================================
 // WEBHOOK: Mercado Pago → Telegram
