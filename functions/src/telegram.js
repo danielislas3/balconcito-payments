@@ -23,16 +23,14 @@ function formatPaymentMessage(payment) {
     : "Fecha desconocida"
 
   const paymentMethod = PAYMENT_METHOD_LABELS[payment.payment_type_id] || payment.payment_type_id || "N/A"
-  const isBankTransfer = payment.payment_type_id === "bank_transfer"
-  const transactionId = payment.transaction_details?.transaction_id || ""
-  const escapedTxId = transactionId ? transactionId.replace(/_/g, "\\_") : ""
+  const e2eId = payment.point_of_interaction?.transaction_data?.e2e_id || ""
   const statusDetail = payment.status_detail === "accredited" ? "Acreditado" : payment.status_detail || ""
 
   return `💰 *PAGO CONFIRMADO*
 
 Monto: $${amount}
 Fecha: ${paymentDate}
-${isBankTransfer && transactionId ? `ID Transacción: \`${escapedTxId}\`` : ""}
+${e2eId ? `Clave SPEI: \`${e2eId}\`` : ""}
 
 Método: ${paymentMethod}
 Estado: ${statusDetail}`
