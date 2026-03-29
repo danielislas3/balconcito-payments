@@ -6,7 +6,7 @@ const telegram = require("./src/telegram")
 
 admin.initializeApp()
 
-const ALLOWED_PAYMENT_TYPES = ["bank_transfer"]
+const ALLOWED_PAYMENT_TYPES = ["bank_transfer", "account_money"]
 
 // ============================================
 // WEBHOOK: Mercado Pago → Telegram
@@ -47,6 +47,11 @@ exports.mpWebhook = onRequest({ region: "us-central1" }, async (req, res) => {
       return res.status(200).json({ success: true, message: "Payment type ignored" })
     }
 
+    if (payment.point_of_interaction?.type === "CASHBACKS") {
+      console.log(`Pago es cashback/interés - ignorado`)
+      return res.status(200).json({ success: true, message: "Cashback ignored" })
+    }
+
     const message = telegram.formatPaymentMessage(payment)
     await telegram.sendMessage(process.env.TELEGRAM_BOT_TOKEN, process.env.TELEGRAM_CHAT_ID, message)
     console.log("Notificación enviada a Telegram")
@@ -77,7 +82,9 @@ exports.checkMovements = onSchedule(
     try {
       const response = await mp.getRecentPayments(process.env.MP_ACCESS_TOKEN, 20)
       const payments = (response.results || []).filter(
-        (p) => p.status === "approved" && ALLOWED_PAYMENT_TYPES.includes(p.payment_type_id)
+        (p) => p.status === "approved"
+          && ALLOWED_PAYMENT_TYPES.includes(p.payment_type_id)
+          && p.point_of_interaction?.type !== "CASHBACKS"
       )
 
       console.log(`${payments.length} pagos aprobados (transferencias)`)
